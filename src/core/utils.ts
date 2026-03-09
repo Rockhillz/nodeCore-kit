@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 
 export const paginate = (
   totalCount: number,
@@ -33,14 +34,5 @@ export const stringifyJSON = (value: any) => {
     return value;
   }
 };
-
-export const isObject = (val: any): boolean => val && typeof val === "object" && !Array.isArray(val);
-
- export const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
-
-export const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
-
-export const isEmpty = (val: any): boolean =>
-    val === null || val === undefined || (typeof val === "object" && Object.keys(val).length === 0) || (typeof val === "string" && val.trim() === "");
 
 

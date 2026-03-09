@@ -1,9 +1,8 @@
 name: Build & Publish SDK
 
 on:
-  push:
-    branches:
-      - main  # Only merges to main trigger publish
+  release:
+    types: [published]
 
 jobs:
   build-test-publish:
