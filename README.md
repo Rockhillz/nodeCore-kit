@@ -163,6 +163,30 @@ const token = await jwtService.encode({
 
 ---
 
+### Encrypt / Decrypt
+
+```ts
+import { encrypt, decrypt } from "nodecore-kit";
+
+// Encrypt a string — defaults to AES-256-GCM
+const token = encrypt("hello world", { secret: process.env.ENCRYPTION_KEY });
+
+// Encrypt an object
+const token = encrypt({ id: 1, role: "admin" }, { secret: process.env.ENCRYPTION_KEY });
+
+// Use a different algorithm
+const token = encrypt({ id: 1 }, { secret: process.env.ENCRYPTION_KEY, algorithm: "aes-256-cbc" });
+
+// Decrypt — algorithm is inferred automatically, no need to specify
+const data = decrypt(token, { secret: process.env.ENCRYPTION_KEY });
+// { id: 1, role: "admin" }
+
+// Typed decrypt
+const data = decrypt<{ id: number; role: string }>(token, { secret: process.env.ENCRYPTION_KEY });
+```
+
+---
+
 ### Joi Validation
 
 ```ts
