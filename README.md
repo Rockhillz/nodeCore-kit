@@ -30,7 +30,7 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - Async utilities — `sleep`, `retry`, `timeout`, `debounce`, `throttle`, `memoize`, `once`
 
 ### Security
-- **JWT** — encode, decode, inspect, expiry helpers via `jwtService`
+- **JWT** — encode, decode, expiry helpers via `jwtService`
 - **Hashing** — bcrypt passwords, HMAC signing, SHA fingerprinting, secure token generation via `hashService`
 
 ### Validation
@@ -148,9 +148,6 @@ const payload = await jwtService.decode<{ userId: number }>({
   secretKey: process.env.JWT_SECRET!,
 });
 
-// Inspect without verifying (safe — never use for auth)
-const claims = jwtService.inspect<{ userId: number }>(token);
-
 // Expiry helpers
 const expiry    = jwtService.getExpiry(token); // Date | null
 const isExpired = jwtService.isExpired(token); // boolean
@@ -162,6 +159,30 @@ const token = await jwtService.encode({
   issuer: "auth-service",
   audience: "api-service",
 });
+```
+
+---
+
+### Encrypt / Decrypt
+
+```ts
+import { encrypt, decrypt } from "nodecore-kit";
+
+// Encrypt a string — defaults to AES-256-GCM
+const token = encrypt("hello world", { secret: process.env.ENCRYPTION_KEY });
+
+// Encrypt an object
+const token = encrypt({ id: 1, role: "admin" }, { secret: process.env.ENCRYPTION_KEY });
+
+// Use a different algorithm
+const token = encrypt({ id: 1 }, { secret: process.env.ENCRYPTION_KEY, algorithm: "aes-256-cbc" });
+
+// Decrypt — algorithm is inferred automatically, no need to specify
+const data = decrypt(token, { secret: process.env.ENCRYPTION_KEY });
+// { id: 1, role: "admin" }
+
+// Typed decrypt
+const data = decrypt<{ id: number; role: string }>(token, { secret: process.env.ENCRYPTION_KEY });
 ```
 
 ---

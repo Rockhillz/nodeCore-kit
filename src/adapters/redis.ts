@@ -23,10 +23,10 @@ interface Logger {
 }
 
 const defaultLogger: Logger = {
-  info:  (msg, meta?) => console.info(msg, meta),
-  error: (msg, meta?) => console.error(msg, meta),
-  warn:  (msg, meta?) => console.warn(msg, meta),
-  debug: (msg, meta?) => console.debug(msg, meta),
+  info:  (msg, meta?) => meta !== undefined ? console.info(msg, meta)  : console.info(msg),
+  error: (msg, meta?) => meta !== undefined ? console.error(msg, meta) : console.error(msg),
+  warn:  (msg, meta?) => meta !== undefined ? console.warn(msg, meta)  : console.warn(msg),
+  debug: (msg, meta?) => meta !== undefined ? console.debug(msg, meta) : console.debug(msg),
 };
 
 // ─── Class ────────────────────────────────────────────────────────────────────
