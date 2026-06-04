@@ -30,7 +30,7 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - Async utilities — `sleep`, `retry`, `timeout`, `debounce`, `throttle`, `memoize`, `once`
 
 ### Security
-- **JWT** — encode, decode, inspect, expiry helpers via `jwtService`
+- **JWT** — encode, decode, expiry helpers via `jwtService`
 - **Hashing** — bcrypt passwords, HMAC signing, SHA fingerprinting, secure token generation via `hashService`
 
 ### Validation
@@ -147,9 +147,6 @@ const payload = await jwtService.decode<{ userId: number }>({
   token,
   secretKey: process.env.JWT_SECRET!,
 });
-
-// Inspect without verifying (safe — never use for auth)
-const claims = jwtService.inspect<{ userId: number }>(token);
 
 // Expiry helpers
 const expiry    = jwtService.getExpiry(token); // Date | null
