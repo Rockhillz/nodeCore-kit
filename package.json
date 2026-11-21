@@ -43,7 +43,7 @@
     "release": "standard-version",
     "release:publish": "standard-version && npm publish --access public",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.typetests.json"
   },
   "repository": {
     "type": "git",

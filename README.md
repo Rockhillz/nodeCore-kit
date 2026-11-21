@@ -32,6 +32,7 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - Async utilities — `sleep`, `retry`, `timeout`, `debounce`, `throttle`, `memoize`, `once`
 
 ### Operations
+- `defineConfig` — typed, validated environment variables; every problem reported at startup, secrets never printed
 - `createHealth` + `healthHandlers` — liveness and readiness endpoints with per-check timeouts
 - `gracefulShutdown` — ordered shutdown on SIGTERM/SIGINT with drain delay and timeout
 - `closeHttpServer` — stop accepting connections, finish in-flight requests, close keep-alive sockets
@@ -674,6 +675,44 @@ req.log.info("Request received");
 logger.setLevel("debug");
 logger.isLevelEnabled("debug"); // true
 ```
+
+---
+
+### Config
+
+Read and validate environment variables once at startup. Values come out typed.
+
+```ts
+import { defineConfig, env, maskSecrets } from "nodecore-kit";
+
+export const config = defineConfig({
+  NODE_ENV:     env.oneOf(["development", "test", "production"], { default: "development" }),
+  PORT:         env.port({ default: 3000 }),
+  DATABASE_URL: env.url({ secret: true, protocols: ["postgres", "postgresql"] }),
+  JWT_SECRET:   env.str({ secret: true, minLength: 32 }),
+  REDIS_URL:    env.url({ optional: true }),
+  DEBUG:        env.bool({ default: false }),            // true/false, 1/0, yes/no, on/off
+  CORS_ORIGINS: env.list({ default: [] }),               // "a.com, b.com" → ["a.com", "b.com"]
+  RATE_LIMIT:   env.num({ default: 100, min: 1, integer: true }),
+});
+
+config.PORT;       // number
+config.NODE_ENV;   // "development" | "test" | "production"
+config.REDIS_URL;  // string | undefined
+
+logger.info("Config loaded", maskSecrets(config)); // secrets shown as "[hidden]"
+```
+
+If anything is wrong, startup fails with one `ConfigError` that lists **every** problem. Secret values are never printed:
+
+```
+ConfigError: Invalid configuration (3 problems):
+  - DATABASE_URL: required but not set
+  - PORT: must be a port number (1–65535), got "99999"
+  - JWT_SECRET: must be at least 32 characters, got [hidden]
+```
+
+Fields: `env.str`, `env.num`, `env.port`, `env.bool`, `env.url`, `env.email`, `env.oneOf`, `env.list`, `env.json<T>()`. Each takes `default`, `optional`, `secret` and `description` (shown in errors). Empty variables (`FOO=`) count as unset. To load a `.env` file, use Node's built-in flag: `node --env-file=.env app.js`.
 
 ---
 

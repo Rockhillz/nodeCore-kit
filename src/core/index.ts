@@ -8,3 +8,4 @@ export * from "./string";
 export * from "./validation";
 export * from "./health";
 export * from "./shutdown";
+export * from "./config";

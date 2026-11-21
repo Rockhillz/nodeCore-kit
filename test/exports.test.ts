@@ -48,6 +48,11 @@ const README_EXPORTS = [
   "gracefulShutdown",
   "closeHttpServer",
   "healthHandlers",
+  // config
+  "defineConfig",
+  "env",
+  "maskSecrets",
+  "ConfigError",
 ];
 
 describe("public exports", () => {
