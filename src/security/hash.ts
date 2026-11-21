@@ -1,5 +1,6 @@
 import bcrypt from "bcrypt";
 import crypto from "crypto";
+import { ValidationError } from "../core/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,7 +36,7 @@ export const hashService = {
    * const hashed = await hashService.hash("myPassword123");
    */
   async hash(plain: string, { rounds = 12 }: HashOptions = {}): Promise<string> {
-    if (!plain) throw new Error("Value to hash is required");
+    if (!plain) throw new ValidationError("Value to hash is required");
     return bcrypt.hash(plain, rounds);
   },
 
@@ -76,8 +77,8 @@ export const hashService = {
     secret: string,
     { algorithm = "sha256", encoding = "hex" }: HmacOptions = {},
   ): string {
-    if (!value) throw new Error("Value is required for HMAC");
-    if (!secret) throw new Error("Secret key is required for HMAC");
+    if (!value) throw new ValidationError("Value is required for HMAC");
+    if (!secret) throw new ValidationError("Secret key is required for HMAC");
     return crypto.createHmac(algorithm, secret).update(value).digest(encoding);
   },
 
@@ -87,11 +88,11 @@ export const hashService = {
    *
    * @example
    * const valid = hashService.verifyHmac(payload, secret, incomingSignature);
-   * if (!valid) throw new Error("Invalid webhook signature");
+   * if (!valid) throw new ValidationError("Invalid webhook signature");
    */
   verifyHmac(value: string, secret: string, signature: string, options?: HmacOptions): boolean {
     try {
-      const expected = this.hmac(value, secret, options);
+      const expected = hashService.hmac(value, secret, options);
       return crypto.timingSafeEqual(
         Buffer.from(expected),
         Buffer.from(signature),
@@ -112,12 +113,12 @@ export const hashService = {
    * const fingerprint = hashService.sha256("file contents here");
    */
   sha256(value: string, encoding: "hex" | "base64" = "hex"): string {
-    if (!value) throw new Error("Value is required for sha256");
+    if (!value) throw new ValidationError("Value is required for sha256");
     return crypto.createHash("sha256").update(value).digest(encoding);
   },
 
   sha512(value: string, encoding: "hex" | "base64" = "hex"): string {
-    if (!value) throw new Error("Value is required for sha512");
+    if (!value) throw new ValidationError("Value is required for sha512");
     return crypto.createHash("sha512").update(value).digest(encoding);
   },
 
@@ -145,8 +146,8 @@ export const hashService = {
    * await email.send({ to: user.email, token }); // send raw token to user
    */
   generateHashedToken(options?: TokenOptions): { token: string; hashed: string } {
-    const token = this.generateToken(options);
-    const hashed = this.sha256(token);
+    const token = hashService.generateToken(options);
+    const hashed = hashService.sha256(token);
     return { token, hashed };
   },
 };

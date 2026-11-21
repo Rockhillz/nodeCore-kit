@@ -32,7 +32,7 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=18"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
     "build": "tsup src/index.ts --format cjs,esm --dts",
@@ -42,7 +42,8 @@
     "prepublishOnly": "npm run build",
     "release": "standard-version",
     "release:publish": "standard-version && npm publish --access public",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
@@ -75,7 +76,6 @@
     "@aws-sdk/client-s3": "^3.1002.0",
     "@aws-sdk/client-sqs": "^3.1002.0",
     "@aws-sdk/s3-request-presigner": "^3.1002.0",
-    "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "express": "^5.2.1",
     "ioredis": "^5.9.3",

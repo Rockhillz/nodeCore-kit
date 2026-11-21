@@ -1,6 +1,5 @@
 import nodemailer, { Transporter, TransportOptions } from "nodemailer";
-import { Logger } from "./types.js";
-import { ValidationError, ServerError } from "../core/index.js";
+import { ValidationError, ServerError, defaultLogger, type Logger } from "../core/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -196,15 +195,6 @@ export class SendGridProvider implements MailProvider {
   }
 }
 
-// ─── Default Logger ───────────────────────────────────────────────────────────
-
-const defaultLogger: Logger = {
-  info:  (msg, meta?) => console.info(msg, meta),
-  error: (msg, meta?) => console.error(msg, meta),
-  warn:  (msg, meta?) => console.warn(msg, meta),
-  debug: (msg, meta?) => console.debug(msg, meta),
-};
-
 // ─── Mailer ───────────────────────────────────────────────────────────────────
 
 export interface MailerOptions {
@@ -260,7 +250,7 @@ export class Mailer {
     }
 
     if (this.previewMode) {
-      this.logger.info("Mailer [preview mode] — mail not sent", {
+      this.logger.warn("Mailer [preview mode] — mail not sent", {
         to: resolved.to,
         subject: resolved.subject,
         from: resolved.from,

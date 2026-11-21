@@ -24,14 +24,24 @@ describe("jwtService", () => {
     const err = await jwtService.decode({ token, secretKey }).catch((e) => e);
 
     expect(err).toBeInstanceOf(TokenExpiredError);
-    expect(errorHandler(err).httpStatusCode).toBe(498);
+    expect(errorHandler(err)).toMatchObject({ httpStatusCode: 401, error: "TOKEN_EXPIRED" });
   });
 
   it("throws TokenInvalidError for a malformed token", async () => {
     const err = await jwtService.decode({ token: "abc.def.ghi", secretKey }).catch((e) => e);
 
     expect(err).toBeInstanceOf(TokenInvalidError);
-    expect(errorHandler(err).httpStatusCode).toBe(499);
+    expect(errorHandler(err)).toMatchObject({ httpStatusCode: 401, error: "TOKEN_INVALID" });
+  });
+
+  it("verify() is the same as decode()", async () => {
+    const token = await jwtService.encode({ data: { userId: 2 }, secretKey });
+    await expect(jwtService.verify({ token, secretKey })).resolves.toMatchObject({ userId: 2 });
+  });
+
+  it("works when methods are destructured", () => {
+    const { isExpired } = jwtService;
+    expect(isExpired(jwt.sign({ exp: Math.floor(Date.now() / 1000) - 10 }, secretKey))).toBe(true);
   });
 
   it("throws TokenInvalidError for a wrong secret", async () => {
@@ -74,5 +84,19 @@ describe("encrypt / decrypt", () => {
   it("fails with ValidationError for a wrong key", () => {
     const encrypted = encrypt("hello", opts);
     expect(() => decrypt(encrypted, { secret: "wrong" })).toThrow(ValidationError);
+  });
+});
+
+describe("hashService", () => {
+  it("throws ValidationError for missing input", async () => {
+    const { hashService } = await import("../src/security/hash");
+    expect(() => hashService.sha256("")).toThrow(ValidationError);
+  });
+
+  it("works when methods are destructured", async () => {
+    const { hashService } = await import("../src/security/hash");
+    const { verifyHmac, hmac, generateHashedToken } = hashService;
+    expect(verifyHmac("payload", "k", hmac("payload", "k"))).toBe(true);
+    expect(generateHashedToken().hashed).toHaveLength(64);
   });
 });

@@ -5,6 +5,8 @@ import {
   ValidationError,
   ServerError,
   parseJSON,
+  defaultLogger,
+  type Logger,
 } from "../core/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -14,20 +16,6 @@ type DurationUnit =
   | "minutes" | "minute"
   | "hours"   | "hour"
   | "days"    | "day";
-
-interface Logger {
-  info: (msg: string, meta?: any) => void;
-  error: (msg: string, meta?: any) => void;
-  warn: (msg: string, meta?: any) => void;
-  debug: (msg: string, meta?: any) => void;
-}
-
-const defaultLogger: Logger = {
-  info:  (msg, meta?) => meta !== undefined ? console.info(msg, meta)  : console.info(msg),
-  error: (msg, meta?) => meta !== undefined ? console.error(msg, meta) : console.error(msg),
-  warn:  (msg, meta?) => meta !== undefined ? console.warn(msg, meta)  : console.warn(msg),
-  debug: (msg, meta?) => meta !== undefined ? console.debug(msg, meta) : console.debug(msg),
-};
 
 // ─── Class ────────────────────────────────────────────────────────────────────
 

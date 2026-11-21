@@ -29,6 +29,20 @@ const README_EXPORTS = [
   "ServerError",
   "HttpError",
   "errorHandler",
+  // added in 0.7
+  "createHttpClient",
+  "expressErrorMiddleware",
+  "isAppError",
+  "ConflictError",
+  "ExistingError",
+  "TooManyRequestsError",
+  "ServiceUnavailableError",
+  "BadGatewayError",
+  "GatewayTimeoutError",
+  "PaymentRequiredError",
+  "consoleLogger",
+  "noopLogger",
+  "defaultLogger",
 ];
 
 describe("public exports", () => {

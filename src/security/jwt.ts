@@ -46,14 +46,21 @@ export const jwtService = {
     });
   },
 
-
   /**
    * Verifies and decodes a JWT string.
    * Throws `TokenExpiredError` when the token has expired, and `TokenInvalidError`
    * for a bad signature, a malformed token, or a token that is not yet valid.
    *
    * @example
-   * const payload = await jwtService.decode<{ userId: number }>({ token, secretKey: "secret" });
+   * const payload = await jwtService.verify<{ userId: number }>({ token, secretKey: "secret" });
+   */
+  verify<T = JwtPayload>(options: JwtDecodeOptions): Promise<T> {
+    return jwtService.decode<T>(options);
+  },
+
+  /**
+   * Same as `verify`: checks the signature and expiry, then returns the payload.
+   * (The name is kept for backwards compatibility. It does verify the token.)
    */
   async decode<T = JwtPayload>({
     token,
@@ -112,7 +119,7 @@ export const jwtService = {
    * if (jwtService.isExpired(token)) { ... }
    */
   isExpired(token: string): boolean {
-    const expiry = this.getExpiry(token);
+    const expiry = jwtService.getExpiry(token);
     if (!expiry) return false;
     return expiry < new Date();
   },

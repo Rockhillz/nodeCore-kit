@@ -1,6 +1,5 @@
 import cron, { ScheduledTask } from "node-cron";
-import { Logger } from "./types.js";
-import { ValidationError, ServerError } from "../core/index.js";
+import { ValidationError, NotFoundError, defaultLogger, type Logger } from "../core/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,15 +27,6 @@ export interface CronJobStatus {
   executionCount: number;
   errorCount: number;
 }
-
-// ─── Default Logger ───────────────────────────────────────────────────────────
-
-const defaultLogger: Logger = {
-  info:  (msg, meta?) => console.info(msg, meta),
-  error: (msg, meta?) => console.error(msg, meta),
-  warn:  (msg, meta?) => console.warn(msg, meta),
-  debug: (msg, meta?) => console.debug(msg, meta),
-};
 
 // ─── Internal Job Record ──────────────────────────────────────────────────────
 
@@ -262,7 +252,7 @@ export class Cron {
 
   private getJob(name: string): JobRecord {
     const record = this.jobs.get(name);
-    if (!record) throw new ServerError(`Cron job "${name}" not found`);
+    if (!record) throw new NotFoundError(`Cron job "${name}" not found`);
     return record;
   }
 }

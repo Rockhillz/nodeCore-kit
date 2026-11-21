@@ -1,5 +1,5 @@
 import winston, { format } from "winston";
-import { Logger } from "../types.js";
+import type { Logger } from "../../core/logger.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
