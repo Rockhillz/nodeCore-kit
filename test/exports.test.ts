@@ -43,6 +43,11 @@ const README_EXPORTS = [
   "consoleLogger",
   "noopLogger",
   "defaultLogger",
+  // health & shutdown
+  "createHealth",
+  "gracefulShutdown",
+  "closeHttpServer",
+  "healthHandlers",
 ];
 
 describe("public exports", () => {

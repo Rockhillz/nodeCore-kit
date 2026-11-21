@@ -6,6 +6,7 @@ import {
   DeleteObjectCommand,
   CopyObjectCommand,
   HeadObjectCommand,
+  HeadBucketCommand,
   NotFound,
   ObjectCannedACL,
 } from "@aws-sdk/client-s3";
@@ -107,6 +108,18 @@ export class S3 {
     const target = bucket ?? this.defaultBucket;
     if (!target) throw new ServerError("S3 bucket not provided");
     return target;
+  }
+
+  /**
+   * Checks the bucket exists and the credentials can access it (HeadBucket).
+   *
+   * @example
+   * createHealth({ checks: { uploads: () => s3.healthCheck() } });
+   */
+  async healthCheck(bucket?: string): Promise<{ bucket: string }> {
+    const target = this.getBucket(bucket);
+    await this.client.send(new HeadBucketCommand({ Bucket: target }));
+    return { bucket: target };
   }
 
   /** URL-encodes each path segment of a key, keeping the slashes */

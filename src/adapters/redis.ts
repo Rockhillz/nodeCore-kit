@@ -23,18 +23,30 @@ export class Redis {
   private client: RedisClient;
   private logger: Logger;
 
-  constructor(url: string, options: RedisOptions = {}, logger?: Logger) {
-    if (!url) throw new ValidationError("Redis connection URL is required");
+  /**
+   * @param urlOrClient A connection URL, or an existing ioredis client to wrap
+   *   (options are ignored then)
+   */
+  constructor(urlOrClient: string | RedisClient, options: RedisOptions = {}, logger?: Logger) {
+    if (!urlOrClient) throw new ValidationError("Redis connection URL is required");
 
     this.logger = logger ?? defaultLogger;
-    this.client = new RedisClient(url, {
-      maxRetriesPerRequest: 3,
-      enableReadyCheck: true,
-      lazyConnect: true,
-      ...options,
-    });
+    this.client =
+      typeof urlOrClient === "string"
+        ? new RedisClient(urlOrClient, {
+            maxRetriesPerRequest: 3,
+            enableReadyCheck: true,
+            lazyConnect: true,
+            ...options,
+          })
+        : urlOrClient;
 
     this.registerListeners();
+  }
+
+  /** The underlying ioredis client, for pipelines, Lua scripts and other commands */
+  get raw(): RedisClient {
+    return this.client;
   }
 
   // ─── Lifecycle ────────────────────────────────────────────────────────────
@@ -54,6 +66,19 @@ export class Redis {
     } catch (err) {
       throw new ServerError("Failed to connect to Redis", { cause: err });
     }
+  }
+
+  /**
+   * Sends PING. Resolves with the connection status when Redis answers,
+   * throws otherwise. Use with `createHealth({ checks: { redis } })`.
+   */
+  async healthCheck(): Promise<{ connection: string }> {
+    if (this.client.status === "end") {
+      throw new ServerError("Redis connection is closed");
+    }
+    const reply = await this.client.ping();
+    if (reply !== "PONG") throw new ServerError(`Unexpected Redis PING reply: ${reply}`);
+    return { connection: this.client.status };
   }
 
   async disconnect(): Promise<void> {

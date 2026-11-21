@@ -4,6 +4,7 @@ import {
   SendMessageCommandInput,
   ReceiveMessageCommand,
   DeleteMessageCommand,
+  GetQueueAttributesCommand,
   MessageAttributeValue,
   Message,
 } from "@aws-sdk/client-sqs";
@@ -88,6 +89,34 @@ export class SQS {
   /** Whether `dequeue` is currently polling the given queue (or any queue) */
   isPolling(queueUrl?: string): boolean {
     return queueUrl ? this.pollers.has(queueUrl) : this.pollers.size > 0;
+  }
+
+  // ─── Health ────────────────────────────────────────────────────────────────
+
+  /**
+   * Reads the queue's attributes to confirm SQS is reachable and the
+   * credentials can access the queue. Resolves with the approximate backlog.
+   *
+   * @example
+   * createHealth({ checks: { orders: () => sqs.healthCheck(ORDERS_QUEUE_URL) } });
+   */
+  async healthCheck(queueUrl: string): Promise<{
+    approximateMessages: number;
+    approximateInFlight: number;
+    polling: boolean;
+  }> {
+    if (!queueUrl) throw new ValidationError("SQS healthCheck requires a queueUrl");
+    const { Attributes = {} } = await this.client.send(
+      new GetQueueAttributesCommand({
+        QueueUrl: queueUrl,
+        AttributeNames: ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"],
+      }),
+    );
+    return {
+      approximateMessages: Number(Attributes.ApproximateNumberOfMessages ?? 0),
+      approximateInFlight: Number(Attributes.ApproximateNumberOfMessagesNotVisible ?? 0),
+      polling: this.pollers.has(queueUrl),
+    };
   }
 
   // ─── Enqueue ───────────────────────────────────────────────────────────────

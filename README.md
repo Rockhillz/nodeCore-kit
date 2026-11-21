@@ -14,7 +14,7 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - **Redis** — get/set/expire, scan, hash ops, auth cache helpers
 - **SQS** — enqueue, long-poll dequeue, safe failure handling (retry / DLQ / drop), awaitable graceful stop
 - **S3** — upload, download, stream, copy, signed URLs; works with LocalStack, MinIO and R2
-- **Cron** — job scheduler with human-readable shorthands, overlap protection, per-job status tracking, and graceful shutdown
+- **Cron** — job scheduler with human-readable shorthands, overlap protection, per-job status tracking, and graceful shutdown that waits for running jobs
 - **Mailer** — provider-agnostic email adapter with SMTP, Resend, and SendGrid support
 - *(Future: Kafka, etc.)*
 
@@ -30,6 +30,11 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - Validator utilities — `isEmail`, `isURL`, `isUUID`, `isEmpty`, `isNil`, and more
 - Object utilities — `flattenObject`, `unflattenObject`
 - Async utilities — `sleep`, `retry`, `timeout`, `debounce`, `throttle`, `memoize`, `once`
+
+### Operations
+- `createHealth` + `healthHandlers` — liveness and readiness endpoints with per-check timeouts
+- `gracefulShutdown` — ordered shutdown on SIGTERM/SIGINT with drain delay and timeout
+- `closeHttpServer` — stop accepting connections, finish in-flight requests, close keep-alive sockets
 
 ### Security
 - **JWT** — encode, verify, expiry helpers via `jwtService`
@@ -669,6 +674,50 @@ req.log.info("Request received");
 logger.setLevel("debug");
 logger.isLevelEnabled("debug"); // true
 ```
+
+---
+
+### Health Checks & Graceful Shutdown
+
+```ts
+import {
+  createHealth, healthHandlers, gracefulShutdown, closeHttpServer,
+} from "nodecore-kit";
+
+// 1. Health: adapters plug in directly, or pass any async function
+const health = createHealth({
+  checks: {
+    redis,                                     // anything with healthCheck()
+    orders: () => sqs.healthCheck(ORDERS_QUEUE_URL),
+    uploads: () => s3.healthCheck(),
+    db: () => prisma.$queryRaw`SELECT 1`,      // throw = down
+  },
+  timeout: 3000,                               // per check
+});
+
+const { liveness, readiness } = healthHandlers(health);
+app.get("/healthz", liveness);   // 200 while the process runs; never calls dependencies
+app.get("/readyz", readiness);   // 200 if all checks pass, 503 otherwise or while shutting down
+
+// 2. Shutdown: on SIGTERM/SIGINT, steps run in order, then the process exits
+const server = app.listen(3000);
+
+gracefulShutdown({
+  health,            // readiness turns 503 immediately so load balancers stop sending traffic
+  drainDelay: 5000,  // give them time to notice (Kubernetes: 5–10s)
+  timeout: 30_000,   // force exit(1) if shutdown takes longer
+  logger,
+  steps: [
+    { name: "http",   stop: () => closeHttpServer(server) },  // finish in-flight requests
+    { name: "sqs",    stop: () => sqs.stop() },               // finish in-flight messages
+    { name: "cron",   stop: () => cron.stopAll() },           // finish running jobs
+    { name: "mailer", stop: () => mailer.close() },
+    { name: "redis",  stop: () => redis.disconnect() },
+  ],
+});
+```
+
+A failing step is logged and the next one still runs. The process exits with 0 if every step succeeded and 1 otherwise. A second Ctrl+C exits immediately. `healthCheck()` is available on `Redis`, `SQS` (takes a queue URL), `S3`, `Cron` and `Mailer`. Failure messages are logged but left out of the response unless you pass `includeErrors: true`.
 
 ---
 

@@ -31,6 +31,10 @@ export interface MailResult {
 export interface MailProvider {
   send(mail: SendMailOptions): Promise<MailResult>;
   readonly name: string;
+  /** Checks the provider is reachable and credentials work (optional) */
+  verify?(): Promise<void>;
+  /** Releases connections (optional) */
+  close?(): void | Promise<void>;
 }
 
 // ─── Nodemailer (SMTP) ────────────────────────────────────────────────────────
@@ -81,6 +85,16 @@ export class SmtpProvider implements MailProvider {
     });
 
     return { success: true, messageId: result.messageId, provider: this.name };
+  }
+
+  /** Connects to the SMTP server and authenticates, without sending mail */
+  async verify(): Promise<void> {
+    await this.transporter.verify();
+  }
+
+  /** Closes pooled SMTP connections */
+  close(): void {
+    this.transporter.close();
   }
 }
 
@@ -280,6 +294,24 @@ export class Mailer {
    * @example
    * mailer.setProvider(new SendGridProvider({ apiKey: "..." }));
    */
+  /**
+   * Checks the provider when it supports it (SMTP: connects and
+   * authenticates). HTTP providers such as Resend and SendGrid have no
+   * cheap check and report as up.
+   */
+  async healthCheck(): Promise<{ provider: string; verified: boolean }> {
+    if (this.previewMode || !this.provider.verify) {
+      return { provider: this.previewMode ? "preview" : this.provider.name, verified: false };
+    }
+    await this.provider.verify();
+    return { provider: this.provider.name, verified: true };
+  }
+
+  /** Releases provider connections. Use as a shutdown step. */
+  async close(): Promise<void> {
+    await this.provider.close?.();
+  }
+
   setProvider(provider: MailProvider): void {
     this.provider = provider;
     this.logger.info("Mailer provider swapped", { provider: provider.name });
