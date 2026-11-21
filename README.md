@@ -19,7 +19,7 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - *(Future: Kafka, etc.)*
 
 ### HTTP Utilities
-- `makeRequest` — typed, generic fetch wrapper with retry and timeout
+- `makeRequest` — typed HTTP request helper with a default timeout and a consistent `HttpError`
 - Pagination helpers
 
 ### Core Utilities
@@ -46,6 +46,7 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - `AuthenticationError`
 - `NotFoundError`
 - `ServerError`
+- `HttpError` — thrown by `makeRequest`, carries upstream `statusCode` and `body`
 
 ---
 
@@ -220,23 +221,30 @@ const dto = joiValidate<CreateUserDto>({
 ### HTTP Requests
 
 ```ts
-// Simple GET
+// Simple GET (typed response)
 const user = await makeRequest<User>({ url: "/api/users/1" });
 
-// POST with typed body
-const post = await makeRequest<Post, CreatePostDto>({
+// POST with auth. `token` is sent as-is in the Authorization header
+const post = await makeRequest<Post>({
   url: "/api/posts",
   method: "POST",
   data: { title: "Hello", body: "World" },
-  token: "my-jwt-token",
+  token: `Bearer ${jwt}`,
 });
 
-// With retry + timeout
-const data = await makeRequest<Data>({
-  url: "/api/slow-endpoint",
-  timeout: 5000,
+// Custom timeout (default 30s); add retries with `retry()`
+const data = await retry(() => makeRequest<Data>({ url: "/api/slow", timeout: 5000 }), {
   retries: 3,
 });
+
+// Failures throw HttpError: upstream status, 504 on timeout, 502 on network error
+try {
+  await makeRequest({ url: "/api/users/999" });
+} catch (err) {
+  if (err instanceof HttpError) {
+    console.log(err.statusCode, err.message, err.body);
+  }
+}
 ```
 
 ---

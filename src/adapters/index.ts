@@ -3,3 +3,5 @@ export * from "./sqs";
 export * from "./loggers/winston";
 export * from "./s3";
 export * from "./cron";
+export * from "./mailers";
+export type { Logger } from "./types";

@@ -13,6 +13,11 @@ export interface EncryptOptions {
 interface EncryptedPayload {
   alg: EncryptionAlgorithm;
   data: string;
+  /**
+   * Original input type: "s" = string, "j" = JSON-serialised object.
+   * Missing on payloads made before 0.6.1; those fall back to the old guess.
+   */
+  t?: "s" | "j";
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -72,6 +77,7 @@ export const encrypt = (
     const payload: EncryptedPayload = {
       alg: algorithm,
       data: typeof data === "string" ? data : JSON.stringify(data),
+      t: typeof data === "string" ? "s" : "j",
     };
 
     // Encrypt
@@ -152,7 +158,7 @@ export const decrypt = <T = any>(
         const parsed = JSON.parse(decrypted) as EncryptedPayload;
 
         // Confirm this is our payload shape and the algorithm matches
-        if (parsed?.alg && parsed?.data && parsed.alg === algorithm) {
+        if (parsed?.alg === algorithm && typeof parsed.data === "string") {
           decryptedPayload = parsed;
           break;
         }
@@ -168,7 +174,10 @@ export const decrypt = <T = any>(
       );
     }
 
-    // Try to parse data as JSON (was an object), fall back to raw string
+    if (decryptedPayload.t === "s") return decryptedPayload.data as T;
+    if (decryptedPayload.t === "j") return JSON.parse(decryptedPayload.data) as T;
+
+    // Legacy payload (no type flag): try JSON, fall back to raw string
     try {
       return JSON.parse(decryptedPayload.data) as T;
     } catch {

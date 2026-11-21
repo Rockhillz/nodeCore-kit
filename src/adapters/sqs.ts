@@ -4,7 +4,6 @@ import {
   SendMessageCommandInput,
   ReceiveMessageCommand,
   DeleteMessageCommand,
-  ChangeMessageVisibilityCommand,
   MessageAttributeValue,
 } from "@aws-sdk/client-sqs";
 

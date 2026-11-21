@@ -24,25 +24,45 @@ export interface WinstonLoggerOptions {
 
 // ─── Formats ──────────────────────────────────────────────────────────────────
 
-const serializeErrors = format((info) => {
-  // Ensure Error objects in meta have their stack trace preserved
-  if (info.meta instanceof Error) {
-    info.meta = {
-      message: info.meta.message,
-      stack: info.meta.stack,
-      name: info.meta.name,
+/**
+ * Converts Error instances (at any depth) into plain objects.
+ * `JSON.stringify(new Error("x"))` gives `{}` because message and stack are
+ * non-enumerable, so without this every `{ err }` logged would be empty.
+ */
+const toSerializable = (value: unknown, depth = 0, seen = new WeakSet<object>()): unknown => {
+  if (value === null || typeof value !== "object") return value;
+  if (seen.has(value)) return "[Circular]";
+  if (depth > 8) return "[Max depth]";
+  seen.add(value);
+
+  if (value instanceof Error) {
+    const plain: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
     };
+    // Keep own enumerable fields (statusCode, errorCode, meta, …)
+    for (const [k, v] of Object.entries(value)) plain[k] = toSerializable(v, depth + 1, seen);
+    const cause = (value as { cause?: unknown }).cause;
+    if (cause !== undefined) plain.cause = toSerializable(cause, depth + 1, seen);
+    return plain;
   }
 
-  if (info instanceof Error) {
-    info.stack = info.stack;
-    info.message = info.message;
-  }
+  if (Array.isArray(value)) return value.map((v) => toSerializable(v, depth + 1, seen));
+  if (value instanceof Date || Buffer.isBuffer(value)) return value;
 
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) out[k] = toSerializable(v, depth + 1, seen);
+  return out;
+};
+
+const serializeErrors = format((info) => {
+  if (info.meta !== undefined) info.meta = toSerializable(info.meta);
   return info;
 });
 
 const prettyFormat = format.combine(
+  serializeErrors(),
   format.colorize(),
   format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
   format.printf(({ timestamp, level, message, service, ...meta }) => {

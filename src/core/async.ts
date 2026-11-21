@@ -160,9 +160,12 @@ export const throttle = <T extends (...args: any[]) => any>(
     if (!inThrottle) {
       const result = fn(...args);
       inThrottle = true;
+      // Only calls made during the window should trigger the trailing call
+      lastArgs = undefined;
 
-      setTimeout(() => {
+      trailingTimer = setTimeout(() => {
         inThrottle = false;
+        trailingTimer = undefined;
 
         if (trailing && lastArgs) {
           fn(...lastArgs);
@@ -178,6 +181,7 @@ export const throttle = <T extends (...args: any[]) => any>(
 
   throttled.cancel = () => {
     clearTimeout(trailingTimer);
+    trailingTimer = undefined;
     inThrottle = false;
     lastArgs = undefined;
   };
@@ -190,6 +194,8 @@ export const throttle = <T extends (...args: any[]) => any>(
 /**
  * Caches the result of `fn` based on its arguments.
  * The cache key is built by JSON-serializing the arguments.
+ * For async functions the promise is cached: concurrent calls share it,
+ * and rejected promises are evicted.
  *
  * @example
  * const getUser = memoize((id: number) => fetchUser(id));
@@ -208,21 +214,17 @@ export const memoize = <T extends (...args: any[]) => any>(
     if (cache.has(key)) return cache.get(key)!;
 
     const result = fn(...args);
+    cache.set(key, result);
 
-    // Handle promises — don't cache rejected promises
+    // Async results: cache the promise itself, so callers always get a promise
+    // back and concurrent calls share one in-flight request. A rejected
+    // promise is evicted so the next call retries.
     if (result instanceof Promise) {
-      return result
-        .then((val: any) => {
-          cache.set(key, val);
-          return val;
-        })
-        .catch((err: any) => {
-          cache.delete(key);
-          throw err;
-        }) as ReturnType<T>;
+      result.catch(() => {
+        if (cache.get(key) === result) cache.delete(key);
+      });
     }
 
-    cache.set(key, result);
     return result;
   };
 

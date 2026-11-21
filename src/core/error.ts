@@ -47,7 +47,7 @@ export class AppError extends Error {
   public readonly meta?: Record<string, any>;
 
   constructor(
-    status: HttpStatus,
+    status: HttpStatus | { code: number; message: string },
     message?: string | null,
     errorCode?: string,
     meta?: Record<string, any>
@@ -185,6 +185,57 @@ export class ExistingError extends AppError {
 export class NoContent extends AppError {
   constructor(message?: string | null, meta?: Record<string, any>) {
     super(HTTP_STATUS.NO_CONTENT, message, "NO_CONTENT", meta);
+  }
+}
+
+/**
+ * Thrown by `makeRequest` when an upstream HTTP call fails.
+ * Carries the upstream status code and the parsed response body.
+ * Network failures use 502 and timeouts use 504.
+ *
+ * @example
+ * try { await makeRequest({ url }); }
+ * catch (err) { if (err instanceof HttpError) console.log(err.statusCode, err.body); }
+ */
+export class HttpError extends AppError {
+  /** Parsed upstream response body (JSON object, or raw text) */
+  public readonly body?: unknown;
+  public readonly url?: string;
+  public readonly method?: string;
+
+  constructor({
+    statusCode,
+    statusText,
+    message,
+    errorCode,
+    body,
+    url,
+    method,
+    meta,
+  }: {
+    statusCode: number;
+    statusText?: string;
+    message?: string;
+    errorCode?: string;
+    body?: unknown;
+    url?: string;
+    method?: string;
+    meta?: Record<string, any>;
+  }) {
+    super(
+      { code: statusCode, message: statusText || "HTTP Error" },
+      message,
+      errorCode || HTTP_STATUS_CODE_ERROR[statusCode] || "HTTP_ERROR",
+      meta,
+    );
+    this.body = body;
+    this.url = url;
+    this.method = method;
+  }
+
+  /** Alias kept for backwards compatibility with the old thrown object shape */
+  get httpStatusCode(): number {
+    return this.statusCode;
   }
 }
 

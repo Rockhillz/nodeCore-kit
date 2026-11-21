@@ -35,6 +35,29 @@ const DEFAULT_OPTIONS: ValidationOptions = {
   stripUnknown: true,
 };
 
+// Headers carry many values a schema won't list (host, user-agent, …),
+// so unknown keys are allowed and kept by default.
+const HEADER_DEFAULT_OPTIONS: ValidationOptions = {
+  allowUnknown: true,
+  stripUnknown: false,
+};
+
+const REQUEST_FIELDS = ["body", "params", "query", "headers", "files"] as const;
+
+/**
+ * Writes the validated value back onto the request.
+ * Express 5 makes `req.query` a getter-only property, so a plain assignment
+ * throws. `defineProperty` sets an own property that works on Express 4 and 5.
+ */
+const setRequestField = (req: Request, field: string, value: unknown): void => {
+  Object.defineProperty(req, field, {
+    value,
+    writable: true,
+    configurable: true,
+    enumerable: true,
+  });
+};
+
 // ─── Core Validator ───────────────────────────────────────────────────────────
 
 const validateField = <T>(
@@ -73,44 +96,20 @@ export const joiMiddleware = (constraints: JoiConstraints) => {
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      if (constraints.body) {
-        req.body = validateField(
-          constraints.body.schema,
-          req.body,
-          constraints.body.options,
-        );
-      }
+      for (const field of REQUEST_FIELDS) {
+        const constraint = constraints[field];
+        if (!constraint) continue;
 
-      if (constraints.params) {
-        req.params = validateField(
-          constraints.params.schema,
-          req.params,
-          constraints.params.options,
-        );
-      }
+        const options =
+          field === "headers"
+            ? { ...HEADER_DEFAULT_OPTIONS, ...constraint.options }
+            : constraint.options;
 
-      if (constraints.query) {
-        req.query = validateField(
-          constraints.query.schema,
-          req.query,
-          constraints.query.options,
-        );
-      }
+        const value = validateField(constraint.schema, (req as any)[field], options);
 
-      if (constraints.headers) {
-        req.headers = validateField(
-          constraints.headers.schema,
-          req.headers,
-          constraints.headers.options,
-        );
-      }
-
-      if (constraints.files) {
-        req.files = validateField(
-          constraints.files.schema,
-          req.files,
-          constraints.files.options,
-        );
+        // Headers are only validated, never replaced: replacing them would
+        // drop every header the schema doesn't list.
+        if (field !== "headers") setRequestField(req, field, value);
       }
 
       next();
