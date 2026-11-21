@@ -703,7 +703,7 @@ const response = errorHandler(err, { service: "orders" });
 | Adapters log `info` only through a logger you pass | Pass `consoleLogger` or `WinstonLogger` to see routine logs |
 | `ExistingError` → `ConflictError`, `NoContent` deprecated | Both still work until 1.0 |
 | `expressErrorMiddleware` lives in `transport` | No change if you import from `nodecore-kit` |
-| Node `>=22.12.0` required (Node 20 reached end-of-life in April 2026) | Use a supported LTS: 22, 24 or 26 (recommended) |
+| Node `>=22.12.0` required (Node 20 reached end-of-life in April 2026) | Use a supported LTS line: 22, 24 or 26 |
 
 ---
 
