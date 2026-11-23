@@ -1,4 +1,5 @@
-import jwt, { JwtPayload, SignOptions, VerifyOptions } from "jsonwebtoken";
+import jwt from "jsonwebtoken";
+import type { SignOptions, VerifyOptions } from "jsonwebtoken";
 import { ValidationError, TokenExpiredError, TokenInvalidError, ServerError } from "../core/index.js";
 
 export interface JwtEncodeOptions {
@@ -54,7 +55,7 @@ export const jwtService = {
    * @example
    * const payload = await jwtService.verify<{ userId: number }>({ token, secretKey: "secret" });
    */
-  verify<T = JwtPayload>(options: JwtDecodeOptions): Promise<T> {
+  verify<T = jwt.JwtPayload>(options: JwtDecodeOptions): Promise<T> {
     return jwtService.decode<T>(options);
   },
 
@@ -62,7 +63,7 @@ export const jwtService = {
    * Same as `verify`: checks the signature and expiry, then returns the payload.
    * (The name is kept for backwards compatibility. It does verify the token.)
    */
-  async decode<T = JwtPayload>({
+  async decode<T = jwt.JwtPayload>({
     token,
     secretKey,
     algorithms,
@@ -106,7 +107,7 @@ export const jwtService = {
    * jwtService.getExpiry(token) // Date | null
    */
   getExpiry(token: string): Date | null {
-    const decoded = jwt.decode(token) as JwtPayload | null;
+    const decoded = jwt.decode(token) as jwt.JwtPayload | null;
     if (!decoded?.exp) return null;
     return new Date(decoded.exp * 1000);
   },
