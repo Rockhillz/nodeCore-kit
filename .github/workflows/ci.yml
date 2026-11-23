@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x, 26.x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - run: npm ci
+      - name: Show Node version
+        run: node -v
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Smoke-test the built package (ESM and CommonJS)
+        run: |
+          node --input-type=module -e "import { uuid, createHttpClient } from './dist/index.js'; if (!uuid.get() || !createHttpClient) process.exit(1)"
+          node -e "const { uuid, createHttpClient } = require('./dist/index.cjs'); if (!uuid.get() || !createHttpClient) process.exit(1)"

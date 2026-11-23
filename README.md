@@ -12,14 +12,16 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 
 ### Infrastructure
 - **Redis** — get/set/expire, scan, hash ops, auth cache helpers
-- **SQS** — enqueue, long-poll dequeue, DLQ support, graceful stop
-- **S3** — upload, download, stream, copy, signed URLs
-- **Cron** — job scheduler with human-readable shorthands, overlap protection, per-job status tracking, and graceful shutdown
+- **SQS** — enqueue, long-poll dequeue, safe failure handling (retry / DLQ / drop), awaitable graceful stop
+- **S3** — upload, download, stream, copy, signed URLs; works with LocalStack, MinIO and R2
+- **Cron** — job scheduler with human-readable shorthands, overlap protection, per-job status tracking, and graceful shutdown that waits for running jobs
 - **Mailer** — provider-agnostic email adapter with SMTP, Resend, and SendGrid support
 - *(Future: Kafka, etc.)*
 
 ### HTTP Utilities
-- `makeRequest` — typed, generic fetch wrapper with retry and timeout
+- `createHttpClient` — reusable client on native `fetch`: base URL, query params, timeouts, retries with backoff, cancellation
+- `makeRequest` — one-off typed request built on the same client
+- Failures always throw `HttpError`
 - Pagination helpers
 
 ### Core Utilities
@@ -29,8 +31,14 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 - Object utilities — `flattenObject`, `unflattenObject`
 - Async utilities — `sleep`, `retry`, `timeout`, `debounce`, `throttle`, `memoize`, `once`
 
+### Operations
+- `defineConfig` — typed, validated environment variables; every problem reported at startup, secrets never printed
+- `createHealth` + `healthHandlers` — liveness and readiness endpoints with per-check timeouts
+- `gracefulShutdown` — ordered shutdown on SIGTERM/SIGINT with drain delay and timeout
+- `closeHttpServer` — stop accepting connections, finish in-flight requests, close keep-alive sockets
+
 ### Security
-- **JWT** — encode, decode, expiry helpers via `jwtService`
+- **JWT** — encode, verify, expiry helpers via `jwtService`
 - **Hashing** — bcrypt passwords, HMAC signing, SHA fingerprinting, secure token generation via `hashService`
 
 ### Validation
@@ -39,13 +47,30 @@ Provides infrastructure helpers, utilities, and microservice building blocks in 
 
 ### Logging
 - `WinstonLogger` — structured logging, file transports, child loggers, pretty dev output
-- Logger interface compatible with `console` or any custom logger
+- One `Logger` interface shared by every adapter: pass `console`, `WinstonLogger`, pino, or your own
+- Adapters are quiet by default: only warnings and errors reach the console
 
 ### Error Handling
-- `ValidationError`
-- `AuthenticationError`
-- `NotFoundError`
-- `ServerError`
+| Class | Status | `errorCode` |
+|---|---|---|
+| `BadRequestError` | 400 | `BAD_REQUEST` |
+| `AuthenticationError` | 401 | `AUTHENTICATION_ERROR` |
+| `TokenExpiredError` / `TokenInvalidError` | 401 | `TOKEN_EXPIRED` / `TOKEN_INVALID` |
+| `PaymentRequiredError` | 402 | `PAYMENT_REQUIRED` |
+| `AuthorizationError` | 403 | `AUTHORIZATION_ERROR` |
+| `NotFoundError` | 404 | `NOT_FOUND` |
+| `ConflictError` | 409 | `ENTRY_EXISTS` |
+| `ValidationError` | 422 | `VALIDATION_ERROR` |
+| `TooManyRequestsError` | 429 | `TOO_MANY_REQUESTS` |
+| `ServerError` | 500 | `SERVER_ERROR` |
+| `BadGatewayError` | 502 | `BAD_GATEWAY` |
+| `ServiceUnavailableError` | 503 | `SERVICE_UNAVAILABLE` |
+| `GatewayTimeoutError` | 504 | `GATEWAY_TIMEOUT` |
+| `HttpError` | upstream status | thrown by the HTTP client, carries `statusCode` and `body` |
+
+- `errorHandler` turns any thrown value into a response; unknown errors get a generic message so internals never leak
+- `expressErrorMiddleware` does the same for Express, with logging, `Retry-After` and request IDs
+- `isAppError` works even when two copies of the package are installed
 
 ---
 
@@ -142,8 +167,9 @@ const token = await jwtService.encode({
   expiresIn: "7d",
 });
 
-// Decode + verify
-const payload = await jwtService.decode<{ userId: number }>({
+// Verify + decode (`decode` is an alias)
+// Throws TokenExpiredError or TokenInvalidError (both 401)
+const payload = await jwtService.verify<{ userId: number }>({
   token,
   secretKey: process.env.JWT_SECRET!,
 });
@@ -151,14 +177,6 @@ const payload = await jwtService.decode<{ userId: number }>({
 // Expiry helpers
 const expiry    = jwtService.getExpiry(token); // Date | null
 const isExpired = jwtService.isExpired(token); // boolean
-
-// Multi-service validation with issuer/audience
-const token = await jwtService.encode({
-  data: { userId: 1 },
-  secretKey,
-  issuer: "auth-service",
-  audience: "api-service",
-});
 ```
 
 ---
@@ -219,24 +237,54 @@ const dto = joiValidate<CreateUserDto>({
 
 ### HTTP Requests
 
+**Reusable client.** Create one per upstream service:
+
 ```ts
-// Simple GET
-const user = await makeRequest<User>({ url: "/api/users/1" });
-
-// POST with typed body
-const post = await makeRequest<Post, CreatePostDto>({
-  url: "/api/posts",
-  method: "POST",
-  data: { title: "Hello", body: "World" },
-  token: "my-jwt-token",
+const payments = createHttpClient({
+  baseURL: "https://payments.internal",
+  headers: { "x-service": "orders" },
+  token: () => `Bearer ${tokens.current()}`, // string or (async) function
+  timeout: 5000,                              // per attempt, default 30s
+  retry: 2,                                   // or { retries, delay, maxDelay, methods, statusCodes }
+  logger,                                     // logs retries
 });
 
-// With retry + timeout
-const data = await makeRequest<Data>({
-  url: "/api/slow-endpoint",
+const invoice = await payments.get<Invoice>("/invoices/42", { query: { expand: ["lines"] } });
+const charge  = await payments.post<Charge>("/charges", { amount: 500 });
+
+// Need status or headers? Use request()
+const { data, status, headers } = await payments.request<Invoice[]>("/invoices");
+
+// Cancel with an AbortSignal
+const controller = new AbortController();
+payments.get("/slow", { signal: controller.signal });
+controller.abort();
+```
+
+Retries apply only to safe methods (GET, HEAD, OPTIONS, PUT, DELETE), on 408/429/502/503/504 and network errors. They use exponential backoff with jitter and honour `Retry-After`. POST and PATCH are never retried unless you list them in `methods`.
+
+**One-off request:**
+
+```ts
+const user = await makeRequest<User>({
+  url: "https://api.example.com/users/1",
+  token: `Bearer ${jwt}`, // sent as-is in the Authorization header
+  query: { include: "profile" },
   timeout: 5000,
-  retries: 3,
+  retry: 2,
 });
+```
+
+**Errors.** Every failure throws `HttpError`: the upstream status, 504 on timeout, 502 on network error. The token and the URL's query string are never included.
+
+```ts
+try {
+  await payments.get("/invoices/999");
+} catch (err) {
+  if (err instanceof HttpError) {
+    console.log(err.statusCode, err.errorCode, err.message, err.body);
+  }
+}
 ```
 
 ---
@@ -385,11 +433,9 @@ await redis.flush(true);  // override
 ### SQS
 
 ```ts
-const sqs = new SQS({
-  region: "us-east-1",
-  accessKeyId: process.env.AWS_KEY!,
-  secretAccessKey: process.env.AWS_SECRET!,
-});
+// Credentials are optional: without them the AWS default chain is used
+// (IAM role, SSO, AWS_* env vars). Add `endpoint` for LocalStack.
+const sqs = new SQS({ region: "us-east-1" }, logger);
 
 // Enqueue
 await sqs.enqueue({
@@ -406,17 +452,24 @@ await sqs.enqueue({
 });
 
 // Dequeue (long-polls until stop() is called)
+// Messages are deleted only after consumerFunction succeeds.
 sqs.dequeue({
   queueUrl: "https://sqs.us-east-1.amazonaws.com/1234/my-queue",
   consumerFunction: async (message) => {
     await processMessage(message);
   },
+  // When consumerFunction throws:
+  //   "retry" (default) — keep it; it reappears after the visibility timeout
+  //   "dlq"   (default when dlqUrl is set) — forward to dlqUrl, then delete
+  //   "drop"  — delete it (message is lost)
   dlqUrl: "https://sqs.us-east-1.amazonaws.com/1234/my-dead-letter-queue",
-  useRedrivePolicy: false,
 });
 
-// Graceful shutdown
-process.on("SIGTERM", () => sqs.stop());
+// Graceful shutdown: interrupts the long poll and waits for in-flight messages
+process.on("SIGTERM", async () => {
+  await sqs.stop();
+  process.exit(0);
+});
 ```
 
 ---
@@ -426,10 +479,12 @@ process.on("SIGTERM", () => sqs.stop());
 ```ts
 const s3 = new S3({
   region: "us-east-1",
-  accessKeyId: process.env.AWS_KEY!,
-  secretAccessKey: process.env.AWS_SECRET!,
   defaultBucket: "my-default-bucket",
+  // optional: endpoint (LocalStack/MinIO/R2), forcePathStyle, publicUrl (CDN),
+  // accessKeyId + secretAccessKey (otherwise the AWS default chain is used)
 });
+
+// A missing object throws NotFoundError (404); other failures throw ServerError
 
 // Upload — returns { bucket, key, url }
 const result = await s3.upload({
@@ -620,6 +675,123 @@ req.log.info("Request received");
 logger.setLevel("debug");
 logger.isLevelEnabled("debug"); // true
 ```
+
+---
+
+### Config
+
+Read and validate environment variables once at startup. Values come out typed.
+
+```ts
+import { defineConfig, env, maskSecrets } from "nodecore-kit";
+
+export const config = defineConfig({
+  NODE_ENV:     env.oneOf(["development", "test", "production"], { default: "development" }),
+  PORT:         env.port({ default: 3000 }),
+  DATABASE_URL: env.url({ secret: true, protocols: ["postgres", "postgresql"] }),
+  JWT_SECRET:   env.str({ secret: true, minLength: 32 }),
+  REDIS_URL:    env.url({ optional: true }),
+  DEBUG:        env.bool({ default: false }),            // true/false, 1/0, yes/no, on/off
+  CORS_ORIGINS: env.list({ default: [] }),               // "a.com, b.com" → ["a.com", "b.com"]
+  RATE_LIMIT:   env.num({ default: 100, min: 1, integer: true }),
+});
+
+config.PORT;       // number
+config.NODE_ENV;   // "development" | "test" | "production"
+config.REDIS_URL;  // string | undefined
+
+logger.info("Config loaded", maskSecrets(config)); // secrets shown as "[hidden]"
+```
+
+If anything is wrong, startup fails with one `ConfigError` that lists **every** problem. Secret values are never printed:
+
+```
+ConfigError: Invalid configuration (3 problems):
+  - DATABASE_URL: required but not set
+  - PORT: must be a port number (1–65535), got "99999"
+  - JWT_SECRET: must be at least 32 characters, got [hidden]
+```
+
+Fields: `env.str`, `env.num`, `env.port`, `env.bool`, `env.url`, `env.email`, `env.oneOf`, `env.list`, `env.json<T>()`. Each takes `default`, `optional`, `secret` and `description` (shown in errors). Empty variables (`FOO=`) count as unset. To load a `.env` file, use Node's built-in flag: `node --env-file=.env app.js`.
+
+---
+
+### Health Checks & Graceful Shutdown
+
+```ts
+import {
+  createHealth, healthHandlers, gracefulShutdown, closeHttpServer,
+} from "nodecore-kit";
+
+// 1. Health: adapters plug in directly, or pass any async function
+const health = createHealth({
+  checks: {
+    redis,                                     // anything with healthCheck()
+    orders: () => sqs.healthCheck(ORDERS_QUEUE_URL),
+    uploads: () => s3.healthCheck(),
+    db: () => prisma.$queryRaw`SELECT 1`,      // throw = down
+  },
+  timeout: 3000,                               // per check
+});
+
+const { liveness, readiness } = healthHandlers(health);
+app.get("/healthz", liveness);   // 200 while the process runs; never calls dependencies
+app.get("/readyz", readiness);   // 200 if all checks pass, 503 otherwise or while shutting down
+
+// 2. Shutdown: on SIGTERM/SIGINT, steps run in order, then the process exits
+const server = app.listen(3000);
+
+gracefulShutdown({
+  health,            // readiness turns 503 immediately so load balancers stop sending traffic
+  drainDelay: 5000,  // give them time to notice (Kubernetes: 5–10s)
+  timeout: 30_000,   // force exit(1) if shutdown takes longer
+  logger,
+  steps: [
+    { name: "http",   stop: () => closeHttpServer(server) },  // finish in-flight requests
+    { name: "sqs",    stop: () => sqs.stop() },               // finish in-flight messages
+    { name: "cron",   stop: () => cron.stopAll() },           // finish running jobs
+    { name: "mailer", stop: () => mailer.close() },
+    { name: "redis",  stop: () => redis.disconnect() },
+  ],
+});
+```
+
+A failing step is logged and the next one still runs. The process exits with 0 if every step succeeded and 1 otherwise. A second Ctrl+C exits immediately. `healthCheck()` is available on `Redis`, `SQS` (takes a queue URL), `S3`, `Cron` and `Mailer`. Failure messages are logged but left out of the response unless you pass `includeErrors: true`.
+
+---
+
+### Errors
+
+```ts
+throw new NotFoundError("User not found");
+throw new ValidationError("Invalid input", { fields: ["email"] }); // meta → `details` in the response
+throw new ServerError("DB write failed", { cause: err });          // cause is logged, never sent
+
+// Express
+app.use(expressErrorMiddleware({ service: "orders", logger }));
+
+// Anywhere else
+const response = errorHandler(err, { service: "orders" });
+// → { success: false, message, error, httpStatusCode, service, details?, requestId? }
+```
+
+---
+
+## ⬆️ Upgrading from 0.6
+
+| Change | What to do |
+|---|---|
+| `TokenExpiredError` / `TokenInvalidError` return **401** (was 498/499) | Check `error: "TOKEN_EXPIRED"` instead of the status code |
+| SQS keeps failed messages by default (0.6 deleted them when no DLQ was set) | Pass `onFailure: "drop"` for the old behaviour |
+| `sqs.stop()` returns a Promise | `await` it during shutdown |
+| `errorHandler` hides messages of non-`AppError` errors | Throw `AppError` subclasses, or pass `exposeUnknown: true` in development |
+| HTTP client errors are `HttpError` instances (0.6 threw a plain object) | Read `err.body` for the response body; `err.httpStatusCode` still works |
+| `makeRequest` uses `fetch`; `axios` is no longer a dependency; `X-Requested-With` is no longer sent | Add the header yourself if an API needs it |
+| `GET` with a body throws `ValidationError` | Use `query` |
+| Adapters log `info` only through a logger you pass | Pass `consoleLogger` or `WinstonLogger` to see routine logs |
+| `ExistingError` → `ConflictError`, `NoContent` deprecated | Both still work until 1.0 |
+| `expressErrorMiddleware` lives in `transport` | No change if you import from `nodecore-kit` |
+| Node `>=22.12.0` required (Node 20 reached end-of-life in April 2026) | Use a supported LTS line: 22, 24 or 26 |
 
 ---
 

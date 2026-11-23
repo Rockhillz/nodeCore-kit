@@ -1,6 +1,5 @@
 import cron, { ScheduledTask } from "node-cron";
-import { Logger } from "./types.js";
-import { ValidationError, ServerError } from "../core/index.js";
+import { ValidationError, NotFoundError, defaultLogger, type Logger } from "../core/index.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -29,15 +28,6 @@ export interface CronJobStatus {
   errorCount: number;
 }
 
-// ─── Default Logger ───────────────────────────────────────────────────────────
-
-const defaultLogger: Logger = {
-  info:  (msg, meta?) => console.info(msg, meta),
-  error: (msg, meta?) => console.error(msg, meta),
-  warn:  (msg, meta?) => console.warn(msg, meta),
-  debug: (msg, meta?) => console.debug(msg, meta),
-};
-
 // ─── Internal Job Record ──────────────────────────────────────────────────────
 
 interface JobRecord {
@@ -45,6 +35,8 @@ interface JobRecord {
   task: ScheduledTask;
   status: CronJobStatus;
   executing: boolean;
+  /** Whether the most recent run threw */
+  lastRunFailed?: boolean;
 }
 
 // ─── Shorthands ───────────────────────────────────────────────────────────────
@@ -68,6 +60,8 @@ const SHORTHANDS: Record<string, string> = {
 
 export class Cron {
   private jobs = new Map<string, JobRecord>();
+  /** Handler runs still in progress, so stopAll() can wait for them */
+  private inFlight = new Set<Promise<void>>();
   private logger: Logger;
 
   constructor(logger?: Logger) {
@@ -155,15 +149,26 @@ export class Cron {
 
     this.logger.debug?.(`Cron job started`, { name, executionCount: record.status.executionCount });
 
+    const run = (async () => {
+      try {
+        await handler();
+        record.lastRunFailed = false;
+        this.logger.debug?.(`Cron job completed`, { name });
+      } catch (err) {
+        record.lastRunFailed = true;
+        record.status.errorCount++;
+        record.status.lastError = err as Error;
+        this.logger.error(`Cron job failed`, { name, err });
+      } finally {
+        record.executing = false;
+      }
+    })();
+
+    this.inFlight.add(run);
     try {
-      await handler();
-      this.logger.debug?.(`Cron job completed`, { name });
-    } catch (err) {
-      record.status.errorCount++;
-      record.status.lastError = err as Error;
-      this.logger.error(`Cron job failed`, { name, err });
+      await run;
     } finally {
-      record.executing = false;
+      this.inFlight.delete(run);
     }
   }
 
@@ -222,17 +227,34 @@ export class Cron {
   }
 
   /**
-   * Stops all registered jobs. Call this on process shutdown.
+   * Stops all registered jobs, then waits for runs already in progress to
+   * finish. Call this on process shutdown.
    *
    * @example
-   * process.on("SIGTERM", () => cron.stopAll());
+   * gracefulShutdown({ steps: [{ name: "cron", stop: () => cron.stopAll() }] });
    */
-  stopAll(): void {
-    for (const [name, record] of this.jobs) {
+  async stopAll(): Promise<void> {
+    for (const record of this.jobs.values()) {
       record.task.stop();
       record.status.running = false;
     }
-    this.logger.info(`All cron jobs stopped`, { count: this.jobs.size });
+    const pending = this.inFlight.size;
+    this.logger.info(`All cron jobs stopped`, { count: this.jobs.size, waitingFor: pending });
+    await Promise.allSettled([...this.inFlight]);
+  }
+
+  /**
+   * Reports job counts. Cron runs in-process, so this never fails; use the
+   * details to spot failing jobs.
+   */
+  async healthCheck(): Promise<{ jobs: number; executing: number; failing: string[] }> {
+    const statuses = this.statusAll();
+    return {
+      jobs: statuses.length,
+      executing: this.inFlight.size,
+      // Jobs whose last run failed
+      failing: statuses.filter((s) => this.lastRunFailed(s.name)).map((s) => s.name),
+    };
   }
 
   // ─── Introspection ────────────────────────────────────────────────────────
@@ -260,9 +282,13 @@ export class Cron {
 
   // ─── Private ──────────────────────────────────────────────────────────────
 
+  private lastRunFailed(name: string): boolean {
+    return this.jobs.get(name)?.lastRunFailed ?? false;
+  }
+
   private getJob(name: string): JobRecord {
     const record = this.jobs.get(name);
-    if (!record) throw new ServerError(`Cron job "${name}" not found`);
+    if (!record) throw new NotFoundError(`Cron job "${name}" not found`);
     return record;
   }
 }

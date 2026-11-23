@@ -6,22 +6,32 @@ import {
   DeleteObjectCommand,
   CopyObjectCommand,
   HeadObjectCommand,
+  HeadBucketCommand,
   NotFound,
   ObjectCannedACL,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "stream";
 
-import { Logger } from "./types.js";
-import { ServerError } from "../core/index.js";
+import { ServerError, NotFoundError, defaultLogger, type Logger } from "../core/index.js";
+import { awsClientConfig, type AwsConnectionConfig } from "./aws.js";
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
-export interface S3Config {
-  region: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+export interface S3Config extends AwsConnectionConfig {
   defaultBucket?: string;
+  /**
+   * Use path-style URLs (`endpoint/bucket/key`). Usually needed for MinIO and
+   * LocalStack. Defaults to true when `endpoint` is set.
+   */
+  forcePathStyle?: boolean;
+  /**
+   * Base URL for the `url` returned by upload/copy, e.g. a CDN
+   * (`https://cdn.example.com`). The encoded key is appended to it.
+   */
+  publicUrl?: string;
+  /** Use an existing S3Client instead of creating one */
+  client?: S3Client;
 }
 
 export interface S3UploadOptions {
@@ -58,15 +68,6 @@ export interface S3SignedUrlOptions {
   expiresIn?: number;
 }
 
-// ─── Default Logger ───────────────────────────────────────────────────────────
-
-const defaultLogger: Logger = {
-  info: (msg, meta?) => console.info(msg, meta),
-  error: (msg, meta?) => console.error(msg, meta),
-  warn: (msg, meta?) => console.warn(msg, meta),
-  debug: (msg, meta?) => console.debug(msg, meta),
-};
-
 // ─── Class ────────────────────────────────────────────────────────────────────
 
 export class S3 {
@@ -74,21 +75,31 @@ export class S3 {
   private logger: Logger;
   private defaultBucket?: string;
   private region: string;
+  private endpoint?: string;
+  private forcePathStyle: boolean;
+  private publicUrl?: string;
 
   constructor(config: S3Config, logger?: Logger) {
     this.logger = logger ?? defaultLogger;
     this.defaultBucket = config.defaultBucket;
     this.region = config.region;
+    this.endpoint = config.endpoint?.replace(/\/+$/, "");
+    this.forcePathStyle = config.forcePathStyle ?? Boolean(config.endpoint);
+    this.publicUrl = config.publicUrl?.replace(/\/+$/, "");
 
-    this.client = new S3Client({
-      region: config.region,
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-    });
+    this.client =
+      config.client ??
+      new S3Client({
+        ...awsClientConfig(config, "S3"),
+        forcePathStyle: this.forcePathStyle,
+      });
 
-    this.logger.info("S3 client initialized", { region: config.region });
+    this.logger.debug?.("S3 client initialized", { region: config.region, endpoint: this.endpoint });
+  }
+
+  /** The underlying AWS SDK client, for operations this adapter doesn't wrap */
+  get raw(): S3Client {
+    return this.client;
   }
 
   // ─── Private Helpers ─────────────────────────────────────────────────────
@@ -99,8 +110,50 @@ export class S3 {
     return target;
   }
 
+  /**
+   * Checks the bucket exists and the credentials can access it (HeadBucket).
+   *
+   * @example
+   * createHealth({ checks: { uploads: () => s3.healthCheck() } });
+   */
+  async healthCheck(bucket?: string): Promise<{ bucket: string }> {
+    const target = this.getBucket(bucket);
+    await this.client.send(new HeadBucketCommand({ Bucket: target }));
+    return { bucket: target };
+  }
+
+  /** URL-encodes each path segment of a key, keeping the slashes */
+  private encodeKey(key: string): string {
+    return key.split("/").map(encodeURIComponent).join("/");
+  }
+
   private getObjectUrl(bucket: string, key: string): string {
-    return `https://${bucket}.s3.${this.region}.amazonaws.com/${key}`;
+    const encoded = this.encodeKey(key);
+    if (this.publicUrl) return `${this.publicUrl}/${encoded}`;
+    if (this.endpoint) {
+      return this.forcePathStyle
+        ? `${this.endpoint}/${bucket}/${encoded}`
+        : this.endpoint.replace("://", `://${bucket}.`) + `/${encoded}`;
+    }
+    return `https://${bucket}.s3.${this.region}.amazonaws.com/${encoded}`;
+  }
+
+  private isNotFound(err: any): boolean {
+    return (
+      err instanceof NotFound ||
+      err?.name === "NotFound" ||
+      err?.name === "NoSuchKey" ||
+      err?.$metadata?.httpStatusCode === 404
+    );
+  }
+
+  /** Maps a missing object to NotFoundError (404) and everything else to ServerError */
+  private fail(err: unknown, message: string, bucket: string, key: string, logName: string): never {
+    if (this.isNotFound(err)) {
+      throw new NotFoundError(`S3 object not found: ${key}`, { bucket, key, cause: err });
+    }
+    this.logger.error(logName, { err, bucket, key });
+    throw new ServerError(message, { cause: err, bucket, key });
   }
 
   private async streamToBuffer(stream: Readable): Promise<Buffer> {
@@ -139,7 +192,7 @@ export class S3 {
       };
 
       await this.client.send(new PutObjectCommand(input));
-      this.logger.info("S3 upload successful", { bucket: targetBucket, key });
+      this.logger.debug?.("S3 upload successful", { bucket: targetBucket, key });
 
       return {
         bucket: targetBucket,
@@ -165,14 +218,13 @@ export class S3 {
         new GetObjectCommand({ Bucket: targetBucket, Key: key }),
       );
 
-      if (!response.Body) throw new ServerError("Empty S3 response body");
+      if (!response.Body) throw new ServerError("Empty S3 response body", { bucket: targetBucket, key });
 
       const buffer = await this.streamToBuffer(response.Body as Readable);
-      this.logger.info("S3 download successful", { bucket: targetBucket, key });
+      this.logger.debug?.("S3 download successful", { bucket: targetBucket, key });
       return buffer;
     } catch (err) {
-      this.logger.error("S3DownloadError", { err, bucket: targetBucket, key });
-      throw new ServerError("Failed to download from S3", { cause: err });
+      this.fail(err, "Failed to download from S3", targetBucket, key, "S3DownloadError");
     }
   }
 
@@ -188,12 +240,11 @@ export class S3 {
         new GetObjectCommand({ Bucket: targetBucket, Key: key }),
       );
 
-      if (!response.Body) throw new ServerError("Empty S3 response body");
-      this.logger.info("S3 stream ready", { bucket: targetBucket, key });
+      if (!response.Body) throw new ServerError("Empty S3 response body", { bucket: targetBucket, key });
+      this.logger.debug?.("S3 stream ready", { bucket: targetBucket, key });
       return response.Body as Readable;
     } catch (err) {
-      this.logger.error("S3StreamError", { err, bucket: targetBucket, key });
-      throw new ServerError("Failed to stream from S3", { cause: err });
+      this.fail(err, "Failed to stream from S3", targetBucket, key, "S3StreamError");
     }
   }
 
@@ -206,7 +257,7 @@ export class S3 {
       await this.client.send(
         new DeleteObjectCommand({ Bucket: targetBucket, Key: key }),
       );
-      this.logger.info("S3 object deleted", { bucket: targetBucket, key });
+      this.logger.debug?.("S3 object deleted", { bucket: targetBucket, key });
       return true;
     } catch (err) {
       this.logger.error("S3DeleteError", { err, bucket: targetBucket, key });
@@ -234,13 +285,14 @@ export class S3 {
     try {
       await this.client.send(
         new CopyObjectCommand({
-          CopySource: `${srcBucket}/${sourceKey}`,
+          // CopySource must be URL-encoded, or keys with spaces/unicode fail
+          CopySource: `${srcBucket}/${this.encodeKey(sourceKey)}`,
           Bucket: dstBucket,
           Key: destinationKey,
         }),
       );
 
-      this.logger.info("S3 object copied", { srcBucket, sourceKey, dstBucket, destinationKey });
+      this.logger.debug?.("S3 object copied", { srcBucket, sourceKey, dstBucket, destinationKey });
 
       return {
         bucket: dstBucket,
@@ -248,8 +300,7 @@ export class S3 {
         url: this.getObjectUrl(dstBucket, destinationKey),
       };
     } catch (err) {
-      this.logger.error("S3CopyError", { err, sourceKey, destinationKey });
-      throw new ServerError("Failed to copy S3 object", { cause: err });
+      this.fail(err, "Failed to copy S3 object", srcBucket, sourceKey, "S3CopyError");
     }
   }
 
@@ -268,9 +319,7 @@ export class S3 {
       );
       return true;
     } catch (err: any) {
-      if (err instanceof NotFound || err?.name === "NotFound" || err?.$metadata?.httpStatusCode === 404) {
-        return false;
-      }
+      if (this.isNotFound(err)) return false;
       // Re-throw non-404 errors — permissions issues shouldn't silently return false
       this.logger.error("S3ExistsError", { err, bucket: targetBucket, key });
       throw new ServerError("Failed to check S3 object existence", { cause: err });
@@ -292,7 +341,7 @@ export class S3 {
         new GetObjectCommand({ Bucket: targetBucket, Key: key }),
         { expiresIn },
       );
-      this.logger.info("S3 signed download URL generated", { bucket: targetBucket, key });
+      this.logger.debug?.("S3 signed download URL generated", { bucket: targetBucket, key });
       return url;
     } catch (err) {
       this.logger.error("S3SignedDownloadUrlError", { err, bucket: targetBucket, key });
@@ -326,7 +375,7 @@ export class S3 {
         }),
         { expiresIn },
       );
-      this.logger.info("S3 signed upload URL generated", { bucket: targetBucket, key });
+      this.logger.debug?.("S3 signed upload URL generated", { bucket: targetBucket, key });
       return url;
     } catch (err) {
       this.logger.error("S3SignedUploadUrlError", { err, bucket: targetBucket, key });
